@@ -8,7 +8,7 @@
 
 # 📷 `sort_images`
 
-**Sort images and videos into `YYYY MM` folders based on the month they were taken**
+**Sort images and videos into `YYYY-MM` folders based on the month they were taken**
 
 [![dependency status](https://deps.rs/repo/github/kaankaraoglu/sort_images/status.svg)](https://deps.rs/repo/github/kaankaraoglu/sort_images)
 [![CI](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml/badge.svg)](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml)
@@ -17,14 +17,14 @@
 ## About
 
 `sort_images` walks a folder of images and videos and moves each one into a
-`YYYY MM` folder (e.g. `2026 01`, `2011 10`) based on the month it was taken,
+`YYYY-MM` folder (e.g. `2026-01`, `2011-10`) based on the month it was taken,
 split by type into `photos` and `videos` subfolders:
 
 ```text
-2019 10/
+2019-10/
 ├── photos/
 └── videos/
-2023 07/
+2023-07/
 ├── photos/
 └── videos/
 ```
@@ -69,8 +69,8 @@ cargo build --release
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | Preview what would happen without moving files or making network calls. |
-| `--recursive` | Descend into subfolders (already-sorted `YYYY MM` buckets are skipped). |
-| `--upload` | Also upload sorted media to Google Photos, mirroring each `YYYY MM` group as an album. |
+| `--recursive` | Descend into subfolders (already-sorted `YYYY-MM` buckets are skipped). |
+| `--upload` | Also upload sorted media to Google Photos, mirroring each `YYYY-MM` group as an album. |
 
 ## Google Photos upload
 
@@ -95,7 +95,7 @@ client_secret = "yyyy"
 ### Usage
 
 ```bash
-# Sort and also upload, mirroring YYYY MM folders as albums
+# Sort and also upload, mirroring YYYY-MM folders as albums
 ./target/release/sort_images ~/Pictures --upload
 
 # Preview without sorting, uploading, or any network calls
@@ -112,7 +112,7 @@ client_secret = "yyyy"
 ## Notes
 
 - Name collisions are handled by appending ` (1)`, ` (2)`, … so nothing is overwritten.
-- Already-created buckets (e.g. `2019 10`) are skipped when running with `--recursive`.
+- Already-created buckets (e.g. `2019-10`) are skipped when running with `--recursive`.
 - Supported image extensions include jpg/jpeg/png/gif/bmp/tiff/webp/heic plus
   common RAW formats (cr2, nef, arw, dng, …); supported video extensions include
   mov/mp4/m4v/3gp/avi/mkv/webm. Edit `IMAGE_EXTS` / `VIDEO_EXTS` in

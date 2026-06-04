@@ -1,4 +1,4 @@
-//! Local upload ledger: which `YYYY MM` albums exist in Google Photos and
+//! Local upload ledger: which `YYYY-MM` albums exist in Google Photos and
 //! which files have already been uploaded. Persisted as JSON so `--upload`
 //! is safely repeatable — only successful uploads are recorded, so a re-run
 //! retries exactly the files that failed.
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Ledger {
-    /// "YYYY MM" -> Google Photos album id.
+    /// "YYYY-MM" -> Google Photos album id.
     albums: HashMap<String, String>,
     /// Keys of files already uploaded (see `upload_key`).
     uploaded: HashSet<String>,
@@ -90,19 +90,19 @@ mod tests {
     #[test]
     fn remembers_album_ids_per_month() {
         let mut ledger = Ledger::default();
-        assert_eq!(ledger.album_id("2011 10"), None);
-        ledger.set_album_id("2011 10", "album-abc");
-        assert_eq!(ledger.album_id("2011 10"), Some("album-abc"));
+        assert_eq!(ledger.album_id("2011-10"), None);
+        ledger.set_album_id("2011-10", "album-abc");
+        assert_eq!(ledger.album_id("2011-10"), Some("album-abc"));
     }
 
     #[test]
     fn round_trips_through_json() {
         let mut ledger = Ledger::default();
-        ledger.set_album_id("2026 01", "alb-1");
+        ledger.set_album_id("2026-01", "alb-1");
         ledger.mark_uploaded(upload_key("2026-01", 5, "x.png"));
         let json = ledger.to_json().unwrap();
         let back = Ledger::from_json(&json).unwrap();
-        assert_eq!(back.album_id("2026 01"), Some("alb-1"));
+        assert_eq!(back.album_id("2026-01"), Some("alb-1"));
         assert!(back.is_uploaded(&upload_key("2026-01", 5, "x.png")));
     }
 }

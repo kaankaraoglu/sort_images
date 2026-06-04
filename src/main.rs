@@ -1,4 +1,4 @@
-//! Sort image and video files into `YYYY MM` folders based on the month they
+//! Sort image and video files into `YYYY-MM` folders based on the month they
 //! were taken, optionally uploading them to Google Photos.
 //!
 //! Usage:
@@ -36,7 +36,7 @@ struct Uploader {
     api: UreqPhotos,
     ledger: Ledger,
     ledger_path: PathBuf,
-    /// Pending uploads grouped by "YYYY MM" album title.
+    /// Pending uploads grouped by "YYYY-MM" album title.
     pending: HashMap<String, Vec<PendingUpload>>,
 }
 
@@ -98,7 +98,7 @@ fn main() {
     for path in files {
         match plan_destination(&path, &images_by_stem) {
             Ok(p) => {
-                let month_dir = format!("{} {:02}", p.year, p.month);
+                let month_dir = format!("{}-{:02}", p.year, p.month);
                 let bucket = format!("{month_dir}/{}", p.subdir);
                 let dest_dir = cfg.root.join(&month_dir).join(p.subdir);
                 let dest = unique_dest(&dest_dir, &path);
@@ -112,7 +112,7 @@ fn main() {
                     );
                     if cfg.upload {
                         println!(
-                            "[dry-run] would upload {} to album {} {:02}",
+                            "[dry-run] would upload {} to album {}-{:02}",
                             file_name(&path),
                             p.year,
                             p.month
@@ -134,7 +134,7 @@ fn main() {
                         moved += 1;
 
                         if let Some(up) = uploader.as_mut() {
-                            let month = format!("{} {:02}", p.year, p.month);
+                            let month = format!("{}-{:02}", p.year, p.month);
                             let name = file_name(&dest);
                             let size = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
                             let captured = format!("{}-{:02}", p.year, p.month);
@@ -212,7 +212,7 @@ fn parse_args() -> Result<Config, String> {
             "--dry-run" => dry_run = true,
             "--recursive" | "-r" => recursive = true,
             "--upload" => upload = true,
-            "-h" | "--help" => return Err("Sort images into `YYYY MM` folders.".to_string()),
+            "-h" | "--help" => return Err("Sort images into `YYYY-MM` folders.".to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}"));
             }
