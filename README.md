@@ -8,7 +8,7 @@
 
 # 📷 `sort_images`
 
-**Sort images and videos into `YYYY Season` folders based on the season they were taken**
+**Sort images and videos into `YYYY MM` folders based on the month they were taken**
 
 [![dependency status](https://deps.rs/repo/github/kaankaraoglu/sort_images/status.svg)](https://deps.rs/repo/github/kaankaraoglu/sort_images)
 [![CI](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml/badge.svg)](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml)
@@ -17,20 +17,20 @@
 ## About
 
 `sort_images` walks a folder of images and videos and moves each one into a
-`YYYY Season` folder (e.g. `2026 Winter`, `2011 Fall`) based on the season it
-was taken, split by type into `photos` and `videos` subfolders:
+`YYYY MM` folder (e.g. `2026 01`, `2011 10`) based on the month it was taken,
+split by type into `photos` and `videos` subfolders:
 
 ```text
-2019 Fall/
+2019 10/
 ├── photos/
 └── videos/
-2023 Summer/
+2023 07/
 ├── photos/
 └── videos/
 ```
 
-Seasons follow calendar quarters (Northern hemisphere):
-Winter = Jan–Mar, Spring = Apr–Jun, Summer = Jul–Sep, Fall = Oct–Dec.
+The month is zero-padded to two digits so the folders sort chronologically
+within a year.
 
 - **Date source (images):** EXIF capture date (`DateTimeOriginal` →
   `DateTimeDigitized` → `DateTime`).
@@ -39,9 +39,9 @@ Winter = Jan–Mar, Spring = Apr–Jun, Summer = Jul–Sep, Fall = Oct–Dec.
 - **Fallback:** the file's last-modified time when no embedded date exists.
 - **Live Photos:** a video sitting next to an image with the same base name
   (e.g. Apple's `IMG_1234.HEIC` + `IMG_1234.MOV`) is treated as the still's
-  motion component — it's filed under `photos/` in the **same** season as the
+  motion component — it's filed under `photos/` in the **same** month as the
   still, so the pair stays together.
-- **Operation:** files are **moved** into the season folders, which are created
+- **Operation:** files are **moved** into the month folders, which are created
   inside the folder you point it at.
 
 ## Build
@@ -66,7 +66,7 @@ cargo build --release
 ## Notes
 
 - Name collisions are handled by appending ` (1)`, ` (2)`, … so nothing is overwritten.
-- Already-created buckets (e.g. `2019 Fall`) are skipped when running with `--recursive`.
+- Already-created buckets (e.g. `2019 10`) are skipped when running with `--recursive`.
 - Supported image extensions include jpg/jpeg/png/gif/bmp/tiff/webp/heic plus
   common RAW formats (cr2, nef, arw, dng, …); supported video extensions include
   mov/mp4/m4v/3gp/avi/mkv/webm. Edit `IMAGE_EXTS` / `VIDEO_EXTS` in
