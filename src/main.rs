@@ -186,6 +186,35 @@ fn collect_media(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io
     Ok(())
 }
 
+/// Recursively delete `.DS_Store` files under `dir`, returning the number
+/// removed. In `dry_run` mode nothing is deleted but the count of files that
+/// would be removed is still returned. Individual failures are logged and
+/// skipped rather than aborting the whole sweep.
+fn purge_ds_store(dir: &Path, dry_run: bool) -> std::io::Result<u32> {
+    let mut removed = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            removed += purge_ds_store(&path, dry_run)?;
+        } else if file_type.is_file()
+            && path.file_name().and_then(|n| n.to_str()) == Some(".DS_Store")
+        {
+            if dry_run {
+                removed += 1;
+            } else {
+                match fs::remove_file(&path) {
+                    Ok(()) => removed += 1,
+                    Err(e) => eprintln!("  ! could not remove {}: {e}", path.display()),
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Avoid descending into folders we (or a previous run) created, e.g. `2019 10`.
 fn looks_like_bucket(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
