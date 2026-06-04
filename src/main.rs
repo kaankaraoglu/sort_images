@@ -1,16 +1,16 @@
-//! Sort image and video files into `YYYY Season` folders based on the season
-//! they were taken.
+//! Sort image and video files into `YYYY MM` folders based on the month they
+//! were taken.
 //!
 //! For each image the capture date is read from EXIF (DateTimeOriginal, then
 //! DateTimeDigitized, then DateTime). For videos (mov/mp4 and friends) the
 //! capture date is read from the QuickTime/ISO-BMFF `moov/mvhd` atom. If no
 //! embedded date is found, the file's last modified time is used as a fallback.
-//! Files are then *moved* into a season folder named e.g. `2026 Winter` or
-//! `2011 Fall`, split by type into `photos` and `videos` subfolders
-//! (e.g. `2019 Fall/photos`, `2023 Summer/videos`).
+//! Files are then *moved* into a month folder named e.g. `2026 01` or
+//! `2011 10`, split by type into `photos` and `videos` subfolders
+//! (e.g. `2019 10/photos`, `2023 07/videos`).
 //!
-//! Seasons are aligned to calendar quarters (Northern hemisphere):
-//! Winter = Jan–Mar, Spring = Apr–Jun, Summer = Jul–Sep, Fall = Oct–Dec.
+//! Month folders use a zero-padded two-digit month so they sort
+//! chronologically within a year.
 //!
 //! Usage:
 //!     sort_images <folder> [--dry-run] [--recursive]
@@ -18,7 +18,7 @@
 //!     <folder>      Directory containing the media to sort.
 //!     --dry-run     Print what would happen without moving any files.
 //!     --recursive   Also descend into subdirectories (skips dirs that look
-//!                   like already-created `YYYY Season` buckets).
+//!                   like already-created `YYYY MM` buckets).
 
 use std::collections::HashMap;
 use std::env;
@@ -79,9 +79,9 @@ fn main() {
     for path in files {
         match plan_destination(&path, &images_by_stem) {
             Ok(p) => {
-                let season = format!("{} {}", p.year, p.season);
-                let bucket = format!("{season}/{}", p.subdir);
-                let dest_dir = cfg.root.join(&season).join(p.subdir);
+                let month_dir = format!("{} {:02}", p.year, p.month);
+                let bucket = format!("{month_dir}/{}", p.subdir);
+                let dest_dir = cfg.root.join(&month_dir).join(p.subdir);
                 let dest = unique_dest(&dest_dir, &path);
 
                 if cfg.dry_run {
@@ -141,7 +141,7 @@ fn parse_args() -> Result<Config, String> {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--recursive" | "-r" => recursive = true,
-            "-h" | "--help" => return Err("Sort images into `YYYY Season` folders.".to_string()),
+            "-h" | "--help" => return Err("Sort images into `YYYY MM` folders.".to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}"));
             }
@@ -180,19 +180,23 @@ fn collect_media(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io
     Ok(())
 }
 
-/// Avoid descending into folders we (or a previous run) created, e.g. `2019 Fall`.
+/// Avoid descending into folders we (or a previous run) created, e.g. `2019 10`.
 fn looks_like_bucket(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
     match name.split_once(' ') {
-        Some((year, season)) => {
-            !year.is_empty()
-                && year.chars().all(|c| c.is_ascii_digit())
-                && matches!(season, "Winter" | "Spring" | "Summer" | "Fall")
+        Some((year, month)) => {
+            !year.is_empty() && year.chars().all(|c| c.is_ascii_digit()) && is_month_label(month)
         }
         None => false,
     }
+}
+
+/// True if `s` is a zero-padded two-digit month (`01`–`12`), as used in the
+/// `YYYY MM` bucket names this tool creates.
+fn is_month_label(s: &str) -> bool {
+    s.len() == 2 && matches!(s.parse::<u32>(), Ok(1..=12))
 }
 
 /// True if `path` has an extension we know how to sort (image or video).
@@ -200,7 +204,7 @@ fn is_media(path: &Path) -> bool {
     is_image(path) || is_video(path)
 }
 
-/// The subfolder a file belongs in within its season bucket: videos go under
+/// The subfolder a file belongs in within its month bucket: videos go under
 /// `videos`, everything else (images) under `photos`.
 fn media_subdir(path: &Path) -> &'static str {
     if is_video(path) {
@@ -228,11 +232,11 @@ fn has_ext_in(path: &Path, exts: &[&str]) -> bool {
     }
 }
 
-/// Where a single file should be filed: a `YYYY` + season bucket and the
+/// Where a single file should be filed: a `YYYY` + month bucket and the
 /// `photos`/`videos` subfolder within it, plus where the date came from.
 struct Placement {
     year: i32,
-    season: &'static str,
+    month: u32,
     subdir: &'static str,
     source: &'static str,
 }
@@ -269,52 +273,42 @@ fn live_photo_still<'a>(
 }
 
 /// Decide the destination bucket and subfolder for a file. The motion half of a
-/// Live Photo is filed as a photo, in the same season as its still, so the pair
+/// Live Photo is filed as a photo, in the same month as its still, so the pair
 /// stays together.
 fn plan_destination(
     path: &Path,
     images_by_stem: &HashMap<(PathBuf, String), PathBuf>,
 ) -> Result<Placement, String> {
     if let Some(still) = live_photo_still(path, images_by_stem) {
-        let (year, season, _) = season_dir_for(still)?;
+        let (year, month, _) = month_dir_for(still)?;
         return Ok(Placement {
             year,
-            season,
+            month,
             subdir: "photos",
             source: "live-photo",
         });
     }
 
-    let (year, season, source) = season_dir_for(path)?;
+    let (year, month, source) = month_dir_for(path)?;
     Ok(Placement {
         year,
-        season,
+        month,
         subdir: media_subdir(path),
         source,
     })
 }
 
-/// Return (year, season, source-of-date) for an image or video.
-fn season_dir_for(path: &Path) -> Result<(i32, &'static str, &'static str), String> {
+/// Return (year, month, source-of-date) for an image or video.
+fn month_dir_for(path: &Path) -> Result<(i32, u32, &'static str), String> {
     if is_video(path) {
         if let Some((year, month)) = video_year_month(path) {
-            return Ok((year, season_of(month), "video"));
+            return Ok((year, month, "video"));
         }
     } else if let Some((year, month)) = exif_year_month(path) {
-        return Ok((year, season_of(month), "exif"));
+        return Ok((year, month, "exif"));
     }
     let (year, month) = mtime_year_month(path)?;
-    Ok((year, season_of(month), "mtime"))
-}
-
-/// Map a month (1–12) to a season name, aligned to calendar quarters.
-fn season_of(month: u32) -> &'static str {
-    match (month - 1) / 3 {
-        0 => "Winter",
-        1 => "Spring",
-        2 => "Summer",
-        _ => "Fall",
-    }
+    Ok((year, month, "mtime"))
 }
 
 /// Try to read the capture date from EXIF metadata.
@@ -559,6 +553,24 @@ mod tests {
         let files = vec![PathBuf::from("/a/IMG_1.heic")];
         let index = index_images_by_stem(&files);
         assert_eq!(live_photo_still(Path::new("/b/IMG_1.mov"), &index), None);
+    }
+
+    #[test]
+    fn month_labels_are_zero_padded_two_digits() {
+        assert!(is_month_label("01"));
+        assert!(is_month_label("12"));
+        assert!(!is_month_label("1")); // not zero-padded
+        assert!(!is_month_label("00")); // out of range
+        assert!(!is_month_label("13")); // out of range
+        assert!(!is_month_label("Fall")); // old season name
+    }
+
+    #[test]
+    fn month_buckets_are_recognised() {
+        assert!(looks_like_bucket(Path::new("/p/2019 10")));
+        assert!(looks_like_bucket(Path::new("/p/2026 01")));
+        assert!(!looks_like_bucket(Path::new("/p/2019 Fall")));
+        assert!(!looks_like_bucket(Path::new("/p/random")));
     }
 
     #[test]
