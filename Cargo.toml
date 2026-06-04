@@ -1,0 +1,12 @@
+[package]
+name = "sort_photos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kamadak-exif = "0.5"
+chrono = "0.4"
+
+[[bin]]
+name = "sort_photos"
+path = "src/main.rs"

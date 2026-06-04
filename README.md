@@ -1,19 +1,36 @@
-<!-- Allow this file not to have a first-line heading -->
-<!-- markdownlint-disable-file MD041 no-emphasis-as-heading -->
+# sort_photos
 
-<!-- inline html -->
-<!-- markdownlint-disable-file MD033 -->
+Moves image files into `YYYY/Qn` folders (e.g. `2026/Q1`, `2011/Q4`) based on the
+quarter each photo was taken.
 
-<div align="center">
+- **Date source:** EXIF capture date (`DateTimeOriginal` → `DateTimeDigitized` →
+  `DateTime`), falling back to the file's last-modified time when no EXIF date exists.
+- **Operation:** files are **moved** into the quarter folders, which are created
+  inside the folder you point it at.
 
-<!--- FIXME: Pick an emoji and name your project! --->
-# 🌻 `repository-template`
+## Build
 
-<!--- FIXME: Write a short catchy description/tagline of the project --->
-**A personal template for creating new repositories**
+```bash
+cargo build --release
+```
 
-<!--- FIXME: Update crate, repo and CI workflow names here! Remove any that are not relevant --->
+## Run
 
-[![dependency status](https://deps.rs/repo/github/kaankaraoglu/euler-rs/status.svg)](https://deps.rs/repo/github/kaankaraoglu/euler-rs)
-[![CI](https://github.com/kaankaraoglu/euler-rs/actions/workflows/build-lint-format.yml/badge.svg)](https://github.com/kaankaraoglu/euler-rs/actions/workflows/build-lint-format.yml)
-</div>
+```bash
+# Sort everything in ~/Pictures
+./target/release/sort_photos ~/Pictures
+
+# Preview first without touching anything
+./target/release/sort_photos ~/Pictures --dry-run
+
+# Also descend into subfolders
+./target/release/sort_photos ~/Pictures --recursive
+```
+
+## Notes
+
+- Name collisions are handled by appending ` (1)`, ` (2)`, … so nothing is overwritten.
+- Already-created `Qn` buckets are skipped when running with `--recursive`.
+- Supported extensions include jpg/jpeg/png/gif/bmp/tiff/webp/heic plus common RAW
+  formats (cr2, nef, arw, dng, …). Edit `IMAGE_EXTS` in `src/main.rs` to adjust.
+- Always try `--dry-run` first on important photos.
