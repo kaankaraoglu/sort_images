@@ -1,4 +1,4 @@
-//! Sorting media into `YYYY MM` buckets: media discovery, capture-date
+//! Sorting media into `YYYY-MM` buckets: media discovery, capture-date
 //! extraction (EXIF / mvhd / mtime), Live Photo pairing, and moving files.
 
 use std::collections::HashMap;
@@ -80,12 +80,12 @@ pub fn purge_ds_store(dir: &Path, dry_run: bool) -> std::io::Result<u32> {
     Ok(removed)
 }
 
-/// Avoid descending into folders we (or a previous run) created, e.g. `2019 10`.
+/// Avoid descending into folders we (or a previous run) created, e.g. `2019-10`.
 fn looks_like_bucket(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
-    match name.split_once(' ') {
+    match name.split_once('-') {
         Some((year, month)) => {
             !year.is_empty() && year.chars().all(|c| c.is_ascii_digit()) && is_month_label(month)
         }
@@ -94,7 +94,7 @@ fn looks_like_bucket(path: &Path) -> bool {
 }
 
 /// True if `s` is a zero-padded two-digit month (`01`–`12`), as used in the
-/// `YYYY MM` bucket names this tool creates.
+/// `YYYY-MM` bucket names this tool creates.
 fn is_month_label(s: &str) -> bool {
     s.len() == 2 && matches!(s.parse::<u32>(), Ok(1..=12))
 }
@@ -500,9 +500,10 @@ mod tests {
 
     #[test]
     fn month_buckets_are_recognised() {
-        assert!(looks_like_bucket(Path::new("/p/2019 10")));
-        assert!(looks_like_bucket(Path::new("/p/2026 01")));
-        assert!(!looks_like_bucket(Path::new("/p/2019 Fall")));
+        assert!(looks_like_bucket(Path::new("/p/2019-10")));
+        assert!(looks_like_bucket(Path::new("/p/2026-01")));
+        assert!(!looks_like_bucket(Path::new("/p/2019 10"))); // old space format
+        assert!(!looks_like_bucket(Path::new("/p/2019-Fall")));
         assert!(!looks_like_bucket(Path::new("/p/random")));
     }
 

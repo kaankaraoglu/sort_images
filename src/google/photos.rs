@@ -368,12 +368,12 @@ mod tests {
         let api = FakeApi::new();
         let mut ledger = crate::ledger::Ledger::default();
 
-        let id1 = ensure_album(&api, &mut ledger, "2011 10").unwrap();
-        let id2 = ensure_album(&api, &mut ledger, "2011 10").unwrap();
+        let id1 = ensure_album(&api, &mut ledger, "2011-10").unwrap();
+        let id2 = ensure_album(&api, &mut ledger, "2011-10").unwrap();
 
         assert_eq!(id1, id2);
         assert_eq!(api.created_albums.borrow().len(), 1, "album created once");
-        assert_eq!(ledger.album_id("2011 10"), Some(id1.as_str()));
+        assert_eq!(ledger.album_id("2011-10"), Some(id1.as_str()));
     }
 
     #[test]
@@ -381,7 +381,7 @@ mod tests {
         let api = FakeApi::new();
         let mut ledger = crate::ledger::Ledger::default();
         let items = vec![pending("ok", 0, "a.jpg"), pending("ok", 1, "b.jpg")];
-        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        let counts = upload_album(&api, &mut ledger, "2011-10", &items);
         assert_eq!(counts.uploaded, 2);
         assert_eq!(counts.failed, 0);
         assert!(ledger.is_uploaded("k-a.jpg"));
@@ -394,7 +394,7 @@ mod tests {
         api.fail_upload_for = Some("b.jpg".into());
         let mut ledger = crate::ledger::Ledger::default();
         let items = vec![pending("uf", 0, "a.jpg"), pending("uf", 1, "b.jpg")];
-        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        let counts = upload_album(&api, &mut ledger, "2011-10", &items);
         assert_eq!(counts.uploaded, 1);
         assert_eq!(counts.failed, 1);
         assert!(ledger.is_uploaded("k-a.jpg"));
@@ -407,7 +407,7 @@ mod tests {
         api.fail_batch_token = Some("token-b.jpg".into());
         let mut ledger = crate::ledger::Ledger::default();
         let items = vec![pending("br", 0, "a.jpg"), pending("br", 1, "b.jpg")];
-        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        let counts = upload_album(&api, &mut ledger, "2011-10", &items);
         assert_eq!(counts.uploaded, 1);
         assert_eq!(counts.failed, 1);
         assert!(ledger.is_uploaded("k-a.jpg"));
@@ -423,7 +423,7 @@ mod tests {
         api.fail_create = true;
         let mut ledger = crate::ledger::Ledger::default();
         let items = vec![pending("ac", 0, "a.jpg")];
-        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        let counts = upload_album(&api, &mut ledger, "2011-10", &items);
         assert_eq!(counts.uploaded, 0);
         assert_eq!(counts.failed, 1);
     }
