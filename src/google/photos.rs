@@ -129,7 +129,9 @@ impl PhotosApi for UreqPhotos {
                 .set("Authorization", &self.bearer())
                 .send_json(json!({ "album": { "title": title } }))
                 .map_err(Self::classify)?;
-            let v: serde_json::Value = resp.into_json().map_err(|e| ApiError::Fatal(e.to_string()))?;
+            let v: serde_json::Value = resp
+                .into_json()
+                .map_err(|e| ApiError::Fatal(e.to_string()))?;
             v["id"]
                 .as_str()
                 .map(str::to_string)
@@ -147,7 +149,8 @@ impl PhotosApi for UreqPhotos {
                 .set("X-Goog-Upload-File-Name", file_name)
                 .send_bytes(bytes)
                 .map_err(Self::classify)?;
-            resp.into_string().map_err(|e| ApiError::Fatal(e.to_string()))
+            resp.into_string()
+                .map_err(|e| ApiError::Fatal(e.to_string()))
         })
     }
 
@@ -199,11 +202,7 @@ mod tests {
             }
             Ok(format!("token-{file_name}"))
         }
-        fn batch_create(
-            &self,
-            album_id: &str,
-            tokens: &[String],
-        ) -> Result<(), ApiError> {
+        fn batch_create(&self, album_id: &str, tokens: &[String]) -> Result<(), ApiError> {
             self.batches
                 .borrow_mut()
                 .push((album_id.to_string(), tokens.len()));

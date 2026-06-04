@@ -81,6 +81,9 @@ mod tests {
     #[test]
     fn missing_google_section_is_an_error() {
         let err = AppConfig::from_toml_str("").unwrap_err();
-        assert!(err.contains("google"), "error should mention the missing section: {err}");
+        assert!(
+            err.contains("google"),
+            "error should mention the missing section: {err}"
+        );
     }
 }

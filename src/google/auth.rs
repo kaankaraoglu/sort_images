@@ -115,7 +115,10 @@ fn refresh(google: &GoogleConfig, refresh_token: &str) -> Result<CachedToken, St
         ])
         .map_err(|e| e.to_string())?;
     let v: Value = resp.into_json().map_err(|e| e.to_string())?;
-    let access_token = v["access_token"].as_str().ok_or("no access_token")?.to_string();
+    let access_token = v["access_token"]
+        .as_str()
+        .ok_or("no access_token")?
+        .to_string();
     let expires_in = v["expires_in"].as_i64().unwrap_or(3600);
     Ok(CachedToken {
         access_token,
@@ -128,11 +131,7 @@ fn refresh(google: &GoogleConfig, refresh_token: &str) -> Result<CachedToken, St
 /// capture the redirect code, exchange it for tokens.
 fn consent_flow(google: &GoogleConfig) -> Result<CachedToken, String> {
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let port = server
-        .server_addr()
-        .to_ip()
-        .ok_or("no ip")?
-        .port();
+    let port = server.server_addr().to_ip().ok_or("no ip")?.port();
     let redirect_uri = format!("http://127.0.0.1:{port}");
 
     let verifier = random_verifier();
@@ -182,8 +181,14 @@ fn exchange_code(
         ])
         .map_err(|e| e.to_string())?;
     let v: Value = resp.into_json().map_err(|e| e.to_string())?;
-    let access_token = v["access_token"].as_str().ok_or("no access_token")?.to_string();
-    let refresh_token = v["refresh_token"].as_str().ok_or("no refresh_token")?.to_string();
+    let access_token = v["access_token"]
+        .as_str()
+        .ok_or("no access_token")?
+        .to_string();
+    let refresh_token = v["refresh_token"]
+        .as_str()
+        .ok_or("no refresh_token")?
+        .to_string();
     let expires_in = v["expires_in"].as_i64().unwrap_or(3600);
     Ok(CachedToken {
         access_token,
