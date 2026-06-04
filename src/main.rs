@@ -5,6 +5,7 @@
 //!     sort_images <folder> [--dry-run] [--recursive]
 
 mod config;
+mod ledger;
 mod sort;
 
 use std::env;
