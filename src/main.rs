@@ -130,6 +130,12 @@ fn main() {
             ""
         }
     );
+
+    match purge_ds_store(&cfg.root, cfg.dry_run) {
+        Ok(n) if cfg.dry_run => println!("[dry-run] would remove {n} .DS_Store file(s)."),
+        Ok(n) => println!("Removed {n} .DS_Store file(s)."),
+        Err(e) => eprintln!("  ! .DS_Store cleanup failed: {e}"),
+    }
 }
 
 fn parse_args() -> Result<Config, String> {
@@ -314,7 +320,7 @@ fn month_dir_for(path: &Path) -> Result<(i32, u32, &'static str), String> {
 /// Try to read the capture date from EXIF metadata.
 fn exif_year_month(path: &Path) -> Option<(i32, u32)> {
     let file = fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
 
     let tags = [
@@ -553,6 +559,48 @@ mod tests {
         let files = vec![PathBuf::from("/a/IMG_1.heic")];
         let index = index_images_by_stem(&files);
         assert_eq!(live_photo_still(Path::new("/b/IMG_1.mov"), &index), None);
+    }
+
+    fn unique_tmp_dir(tag: &str) -> PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("sort_images-{tag}-{nanos}"))
+    }
+
+    #[test]
+    fn purges_ds_store_recursively() {
+        let base = unique_tmp_dir("purge");
+        let sub = base.join("2019 Fall").join("photos");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(base.join(".DS_Store"), b"x").unwrap();
+        fs::write(sub.join(".DS_Store"), b"x").unwrap();
+        fs::write(sub.join("keep.jpg"), b"x").unwrap();
+
+        let removed = purge_ds_store(&base, false).unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(!base.join(".DS_Store").exists());
+        assert!(!sub.join(".DS_Store").exists());
+        assert!(sub.join("keep.jpg").exists(), "other files are untouched");
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn dry_run_counts_but_keeps_ds_store() {
+        let base = unique_tmp_dir("purge-dry");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join(".DS_Store"), b"x").unwrap();
+
+        let removed = purge_ds_store(&base, true).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(base.join(".DS_Store").exists(), "dry run deletes nothing");
+
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

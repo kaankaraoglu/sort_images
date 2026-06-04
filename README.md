@@ -73,4 +73,7 @@ cargo build --release
   `src/main.rs` to adjust.
 - Video capture dates are read from the `mvhd` atom for the QuickTime/ISO-BMFF
   family (mov, mp4, m4v, 3gp); other video containers fall back to mtime.
+- After sorting, stray `.DS_Store` files are removed recursively from the target
+  directory and the count is logged (`--dry-run` reports the count without
+  deleting anything).
 - Always try `--dry-run` first on important photos.
