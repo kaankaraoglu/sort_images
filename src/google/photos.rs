@@ -2,6 +2,8 @@
 //! `PhotosApi` trait so upload orchestration can be tested with a fake; the
 //! `UreqPhotos` implementation talks to the real API over HTTPS.
 
+use std::path::PathBuf;
+
 use crate::ledger::Ledger;
 
 /// Max media items per `mediaItems:batchCreate` call (Google's documented limit).
@@ -11,11 +13,18 @@ const UPLOAD_URL: &str = "https://photoslibrary.googleapis.com/v1/uploads";
 const ALBUMS_URL: &str = "https://photoslibrary.googleapis.com/v1/albums";
 const BATCH_URL: &str = "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate";
 
-/// A file ready to upload, with its ledger key.
+/// A file queued for upload: its name, on-disk path (read lazily at upload
+/// time to cap peak memory at one file), and ledger key.
 pub struct PendingUpload {
     pub file_name: String,
-    pub bytes: Vec<u8>,
+    pub path: PathBuf,
     pub key: String,
+}
+
+/// Outcome for one media item in a batchCreate response.
+pub struct ItemOutcome {
+    pub token: String,
+    pub ok: bool,
 }
 
 #[derive(Debug)]
@@ -39,7 +48,8 @@ impl std::fmt::Display for ApiError {
 pub trait PhotosApi {
     fn create_album(&self, title: &str) -> Result<String, ApiError>;
     fn upload_bytes(&self, file_name: &str, bytes: &[u8]) -> Result<String, ApiError>;
-    fn batch_create(&self, album_id: &str, tokens: &[String]) -> Result<(), ApiError>;
+    fn batch_create(&self, album_id: &str, tokens: &[String])
+        -> Result<Vec<ItemOutcome>, ApiError>;
 }
 
 /// Split `items` into contiguous chunks of at most `max` elements.
@@ -61,15 +71,107 @@ pub fn ensure_album<A: PhotosApi>(
     Ok(id)
 }
 
-/// Upload one file's bytes and return its upload token. Does NOT mark the
-/// ledger — the caller marks the key only after `batch_create` succeeds, so a
-/// failed attach does not strand the file as "uploaded".
-pub fn upload_one<A: PhotosApi>(
+/// Map a batchCreate response to per-token outcomes. An item is OK when its
+/// result echoes the `uploadToken` and carries a `mediaItem` (Google sets a
+/// non-zero `status` and omits `mediaItem` on failure). Any token without a
+/// matching successful result is reported as failed.
+fn parse_batch_results(tokens: &[String], body: &serde_json::Value) -> Vec<ItemOutcome> {
+    let results = body.get("newMediaItemResults").and_then(|r| r.as_array());
+    tokens
+        .iter()
+        .map(|t| {
+            let ok = results.is_some_and(|arr| {
+                arr.iter().any(|r| {
+                    r.get("uploadToken").and_then(|u| u.as_str()) == Some(t.as_str())
+                        && r.get("mediaItem").is_some()
+                })
+            });
+            ItemOutcome {
+                token: t.clone(),
+                ok,
+            }
+        })
+        .collect()
+}
+
+/// Success/failure tallies for one album's upload pass.
+pub struct UploadCounts {
+    pub uploaded: u32,
+    pub failed: u32,
+}
+
+/// Upload all `items` into the `album_title` album: ensure the album exists,
+/// read+upload each file's bytes lazily (one file in memory at a time), attach
+/// in `BATCH_LIMIT`-sized batches, and mark the ledger only for items Google
+/// accepted. Per-file and per-item failures are logged and counted, never
+/// fatal — so a re-run retries exactly the files that did not succeed.
+pub fn upload_album<A: PhotosApi>(
     api: &A,
-    _ledger: &mut Ledger,
-    item: &PendingUpload,
-) -> Result<String, ApiError> {
-    api.upload_bytes(&item.file_name, &item.bytes)
+    ledger: &mut Ledger,
+    album_title: &str,
+    items: &[PendingUpload],
+) -> UploadCounts {
+    let mut counts = UploadCounts {
+        uploaded: 0,
+        failed: 0,
+    };
+    if items.is_empty() {
+        return counts;
+    }
+    let album_id = match ensure_album(api, ledger, album_title) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("  ! could not create/find album {album_title}: {e}");
+            counts.failed += items.len() as u32;
+            return counts;
+        }
+    };
+
+    // Upload bytes (read lazily), collecting (token, key) for successes.
+    let mut uploaded: Vec<(String, String)> = Vec::new();
+    for item in items {
+        let bytes = match std::fs::read(&item.path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  ! could not read {} for upload: {e}", item.path.display());
+                counts.failed += 1;
+                continue;
+            }
+        };
+        match api.upload_bytes(&item.file_name, &bytes) {
+            Ok(token) => uploaded.push((token, item.key.clone())),
+            Err(e) => {
+                eprintln!("  ! upload failed for {}: {e}", item.file_name);
+                counts.failed += 1;
+            }
+        }
+    }
+
+    // Attach in batches; mark the ledger only for items Google accepted.
+    for batch in chunk(&uploaded, BATCH_LIMIT) {
+        let tokens: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
+        match api.batch_create(&album_id, &tokens) {
+            Ok(outcomes) => {
+                for (token, key) in &batch {
+                    if outcomes.iter().any(|o| &o.token == token && o.ok) {
+                        ledger.mark_uploaded(key.clone());
+                        counts.uploaded += 1;
+                    } else {
+                        eprintln!("  ! Google rejected upload for {key}");
+                        counts.failed += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "  ! attaching {} item(s) to {album_title} failed: {e}",
+                    tokens.len()
+                );
+                counts.failed += tokens.len() as u32;
+            }
+        }
+    }
+    counts
 }
 
 use std::thread;
@@ -154,17 +256,24 @@ impl PhotosApi for UreqPhotos {
         })
     }
 
-    fn batch_create(&self, album_id: &str, tokens: &[String]) -> Result<(), ApiError> {
+    fn batch_create(
+        &self,
+        album_id: &str,
+        tokens: &[String],
+    ) -> Result<Vec<ItemOutcome>, ApiError> {
         let new_items: Vec<_> = tokens
             .iter()
             .map(|t| json!({ "simpleMediaItem": { "uploadToken": t } }))
             .collect();
         with_retry(|| {
-            ureq::post(BATCH_URL)
+            let resp = ureq::post(BATCH_URL)
                 .set("Authorization", &self.bearer())
                 .send_json(json!({ "albumId": album_id, "newMediaItems": new_items }))
                 .map_err(Self::classify)?;
-            Ok(())
+            let v: serde_json::Value = resp
+                .into_json()
+                .map_err(|e| ApiError::Fatal(e.to_string()))?;
+            Ok(parse_batch_results(tokens, &v))
         })
     }
 }
@@ -173,26 +282,32 @@ impl PhotosApi for UreqPhotos {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::fs;
 
     /// Records calls and returns canned ids so we can assert orchestration.
     struct FakeApi {
         created_albums: RefCell<Vec<String>>,
-        batches: RefCell<Vec<(String, usize)>>, // (album_id, item count)
+        fail_create: bool,
         fail_upload_for: Option<String>,
+        fail_batch_token: Option<String>, // token Google "rejects"
     }
 
     impl FakeApi {
         fn new() -> Self {
             Self {
                 created_albums: RefCell::new(vec![]),
-                batches: RefCell::new(vec![]),
+                fail_create: false,
                 fail_upload_for: None,
+                fail_batch_token: None,
             }
         }
     }
 
     impl PhotosApi for FakeApi {
         fn create_album(&self, title: &str) -> Result<String, ApiError> {
+            if self.fail_create {
+                return Err(ApiError::Fatal("create failed".into()));
+            }
             self.created_albums.borrow_mut().push(title.to_string());
             Ok(format!("album-for-{title}"))
         }
@@ -202,11 +317,39 @@ mod tests {
             }
             Ok(format!("token-{file_name}"))
         }
-        fn batch_create(&self, album_id: &str, tokens: &[String]) -> Result<(), ApiError> {
-            self.batches
-                .borrow_mut()
-                .push((album_id.to_string(), tokens.len()));
-            Ok(())
+        fn batch_create(
+            &self,
+            _album_id: &str,
+            tokens: &[String],
+        ) -> Result<Vec<ItemOutcome>, ApiError> {
+            Ok(tokens
+                .iter()
+                .map(|t| ItemOutcome {
+                    token: t.clone(),
+                    ok: self.fail_batch_token.as_deref() != Some(t.as_str()),
+                })
+                .collect())
+        }
+    }
+
+    fn tmp_file(tag: &str, n: usize) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sort_images-photos-{tag}-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("f{n}.jpg"));
+        fs::write(&path, b"data").unwrap();
+        path
+    }
+
+    fn pending(tag: &str, n: usize, name: &str) -> PendingUpload {
+        PendingUpload {
+            file_name: name.to_string(),
+            path: tmp_file(tag, n),
+            key: format!("k-{name}"),
         }
     }
 
@@ -234,18 +377,70 @@ mod tests {
     }
 
     #[test]
-    fn upload_file_records_success_in_ledger() {
+    fn upload_album_marks_only_successful_items() {
         let api = FakeApi::new();
         let mut ledger = crate::ledger::Ledger::default();
-        let item = PendingUpload {
-            file_name: "a.jpg".into(),
-            bytes: vec![1, 2, 3],
-            key: "2011-10|3|a.jpg".into(),
-        };
-        let token = upload_one(&api, &mut ledger, &item).unwrap();
-        assert_eq!(token, "token-a.jpg");
-        // ledger is marked by the caller after batch_create; upload_one only
-        // returns the token, so it must NOT be marked yet.
-        assert!(!ledger.is_uploaded(&item.key));
+        let items = vec![pending("ok", 0, "a.jpg"), pending("ok", 1, "b.jpg")];
+        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        assert_eq!(counts.uploaded, 2);
+        assert_eq!(counts.failed, 0);
+        assert!(ledger.is_uploaded("k-a.jpg"));
+        assert!(ledger.is_uploaded("k-b.jpg"));
+    }
+
+    #[test]
+    fn upload_album_counts_upload_failures_and_does_not_mark_them() {
+        let mut api = FakeApi::new();
+        api.fail_upload_for = Some("b.jpg".into());
+        let mut ledger = crate::ledger::Ledger::default();
+        let items = vec![pending("uf", 0, "a.jpg"), pending("uf", 1, "b.jpg")];
+        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        assert_eq!(counts.uploaded, 1);
+        assert_eq!(counts.failed, 1);
+        assert!(ledger.is_uploaded("k-a.jpg"));
+        assert!(!ledger.is_uploaded("k-b.jpg"));
+    }
+
+    #[test]
+    fn upload_album_honors_per_item_batch_rejection() {
+        let mut api = FakeApi::new();
+        api.fail_batch_token = Some("token-b.jpg".into());
+        let mut ledger = crate::ledger::Ledger::default();
+        let items = vec![pending("br", 0, "a.jpg"), pending("br", 1, "b.jpg")];
+        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        assert_eq!(counts.uploaded, 1);
+        assert_eq!(counts.failed, 1);
+        assert!(ledger.is_uploaded("k-a.jpg"));
+        assert!(
+            !ledger.is_uploaded("k-b.jpg"),
+            "rejected item must remain unmarked for retry"
+        );
+    }
+
+    #[test]
+    fn upload_album_fails_all_when_album_creation_fails() {
+        let mut api = FakeApi::new();
+        api.fail_create = true;
+        let mut ledger = crate::ledger::Ledger::default();
+        let items = vec![pending("ac", 0, "a.jpg")];
+        let counts = upload_album(&api, &mut ledger, "2011 10", &items);
+        assert_eq!(counts.uploaded, 0);
+        assert_eq!(counts.failed, 1);
+    }
+
+    #[test]
+    fn parse_batch_results_flags_missing_and_rejected_items() {
+        let tokens = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        let body = serde_json::json!({
+            "newMediaItemResults": [
+                { "uploadToken": "t1", "mediaItem": { "id": "x" } },
+                { "uploadToken": "t2", "status": { "code": 3, "message": "bad" } }
+                // t3 absent entirely
+            ]
+        });
+        let outcomes = parse_batch_results(&tokens, &body);
+        assert!(outcomes.iter().find(|o| o.token == "t1").unwrap().ok);
+        assert!(!outcomes.iter().find(|o| o.token == "t2").unwrap().ok);
+        assert!(!outcomes.iter().find(|o| o.token == "t3").unwrap().ok);
     }
 }

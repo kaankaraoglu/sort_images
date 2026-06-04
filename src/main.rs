@@ -17,9 +17,7 @@ use std::process;
 
 use config::{ledger_path, token_path, AppConfig};
 use google::auth::authorize;
-use google::photos::{
-    chunk, ensure_album, upload_one, PendingUpload, PhotosApi, UreqPhotos, BATCH_LIMIT,
-};
+use google::photos::{upload_album, PendingUpload, UreqPhotos};
 use ledger::Ledger;
 use sort::{
     collect_media, file_name, index_images_by_stem, move_file, plan_destination, purge_ds_store,
@@ -53,6 +51,12 @@ fn build_uploader() -> Result<Uploader, String> {
     })
 }
 
+/// Uploading happens only when `--upload` is set and we are NOT in dry-run —
+/// this is the single gate that guarantees `--dry-run` performs no network I/O.
+fn should_upload(upload: bool, dry_run: bool) -> bool {
+    upload && !dry_run
+}
+
 fn main() {
     let cfg = match parse_args() {
         Ok(c) => c,
@@ -68,7 +72,7 @@ fn main() {
         process::exit(1);
     }
 
-    let mut uploader = if cfg.upload && !cfg.dry_run {
+    let mut uploader = if should_upload(cfg.upload, cfg.dry_run) {
         match build_uploader() {
             Ok(u) => Some(u),
             Err(e) => {
@@ -138,22 +142,11 @@ fn main() {
                             if up.ledger.is_uploaded(&key) {
                                 up_skipped += 1;
                             } else {
-                                match fs::read(&dest) {
-                                    Ok(bytes) => {
-                                        up.pending.entry(month).or_default().push(PendingUpload {
-                                            file_name: name,
-                                            bytes,
-                                            key,
-                                        })
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "  ! could not read {} for upload: {e}",
-                                            dest.display()
-                                        );
-                                        up_failed += 1;
-                                    }
-                                }
+                                up.pending.entry(month).or_default().push(PendingUpload {
+                                    file_name: name,
+                                    path: dest.clone(),
+                                    key,
+                                });
                             }
                         }
                     }
@@ -189,57 +182,17 @@ fn main() {
     }
 
     if let Some(up) = uploader.as_mut() {
-        // Sort album titles for deterministic, chronological output.
         let mut months: Vec<String> = up.pending.keys().cloned().collect();
         months.sort();
         for month in months {
             let items = up.pending.remove(&month).unwrap_or_default();
-            let album_id = match ensure_album(&up.api, &mut up.ledger, &month) {
-                Ok(id) => id,
-                Err(e) => {
-                    eprintln!("  ! could not create/find album {month}: {e}");
-                    up_failed += items.len() as u32;
-                    continue;
-                }
-            };
-
-            // Upload bytes, collecting (token, key) for successes.
-            let mut uploaded: Vec<(String, String)> = Vec::new();
-            for item in &items {
-                match upload_one(&up.api, &mut up.ledger, item) {
-                    Ok(token) => uploaded.push((token, item.key.clone())),
-                    Err(e) => {
-                        eprintln!("  ! upload failed for {}: {e}", item.file_name);
-                        up_failed += 1;
-                    }
-                }
-            }
-
-            // Attach in batches of <= BATCH_LIMIT; mark ledger only on success.
-            for batch in chunk(&uploaded, BATCH_LIMIT) {
-                let tokens: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
-                match up.api.batch_create(&album_id, &tokens) {
-                    Ok(()) => {
-                        for (_, key) in &batch {
-                            up.ledger.mark_uploaded(key.clone());
-                            up_uploaded += 1;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  ! attaching {} item(s) to {month} failed: {e}",
-                            tokens.len()
-                        );
-                        up_failed += tokens.len() as u32;
-                    }
-                }
-            }
+            let counts = upload_album(&up.api, &mut up.ledger, &month, &items);
+            up_uploaded += counts.uploaded;
+            up_failed += counts.failed;
         }
-
         if let Err(e) = up.ledger.save(&up.ledger_path) {
             eprintln!("  ! could not save upload ledger: {e}");
         }
-
         println!("Upload: {up_uploaded} uploaded, {up_skipped} skipped, {up_failed} failed.");
     }
 
@@ -279,4 +232,20 @@ fn parse_args() -> Result<Config, String> {
         recursive,
         upload,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_upload;
+
+    #[test]
+    fn dry_run_never_uploads_even_with_upload_flag() {
+        assert!(
+            !should_upload(true, true),
+            "dry-run must disable uploads (no network)"
+        );
+        assert!(should_upload(true, false));
+        assert!(!should_upload(false, false));
+        assert!(!should_upload(false, true));
+    }
 }
