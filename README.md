@@ -116,7 +116,7 @@ client_secret = "yyyy"
 - Supported image extensions include jpg/jpeg/png/gif/bmp/tiff/webp/heic plus
   common RAW formats (cr2, nef, arw, dng, …); supported video extensions include
   mov/mp4/m4v/3gp/avi/mkv/webm. Edit `IMAGE_EXTS` / `VIDEO_EXTS` in
-  `src/main.rs` to adjust.
+  `src/sort.rs` to adjust.
 - Video capture dates are read from the `mvhd` atom for the QuickTime/ISO-BMFF
   family (mov, mp4, m4v, 3gp); other video containers fall back to mtime.
 - After sorting, stray `.DS_Store` files are removed recursively from the target

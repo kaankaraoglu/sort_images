@@ -53,17 +53,20 @@ use serde_json::Value;
 use crate::config::GoogleConfig;
 
 /// Generate a random 64-char PKCE verifier from the unreserved set.
-fn random_verifier() -> String {
+fn random_verifier() -> Result<String, String> {
     // 48 random bytes -> base64url (64 chars), all unreserved per RFC 7636.
     let mut buf = [0u8; 48];
-    getrandom_fill(&mut buf);
-    URL_SAFE_NO_PAD.encode(buf)
+    getrandom_fill(&mut buf)?;
+    Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 
-/// Fill `buf` with OS randomness. Uses /dev/urandom (sufficient for PKCE).
-fn getrandom_fill(buf: &mut [u8]) {
-    let mut f = fs::File::open("/dev/urandom").expect("open /dev/urandom");
-    f.read_exact(buf).expect("read /dev/urandom");
+/// Fill `buf` with OS randomness from /dev/urandom (sufficient for PKCE).
+/// Unix-only: returns an error on platforms without /dev/urandom or on read
+/// failure, so the consent flow surfaces it cleanly instead of panicking.
+fn getrandom_fill(buf: &mut [u8]) -> Result<(), String> {
+    let mut f = fs::File::open("/dev/urandom").map_err(|e| format!("open /dev/urandom: {e}"))?;
+    f.read_exact(buf)
+        .map_err(|e| format!("read /dev/urandom: {e}"))
 }
 
 /// Return a valid access token: from cache if fresh, refreshed if stale, or via
@@ -134,7 +137,7 @@ fn consent_flow(google: &GoogleConfig) -> Result<CachedToken, String> {
     let port = server.server_addr().to_ip().ok_or("no ip")?.port();
     let redirect_uri = format!("http://127.0.0.1:{port}");
 
-    let verifier = random_verifier();
+    let verifier = random_verifier()?;
     let challenge = pkce_challenge(&verifier);
 
     let auth_url = format!(
@@ -144,7 +147,7 @@ fn consent_flow(google: &GoogleConfig) -> Result<CachedToken, String> {
         cid = urlencode(&google.client_id),
         ru = urlencode(&redirect_uri),
         scope = urlencode(SCOPE),
-        ch = challenge,
+        ch = urlencode(&challenge),
     );
 
     println!("Opening browser for Google Photos authorization...");
@@ -211,17 +214,49 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// Extract a query parameter value from a request URL like `/?code=abc&x=y`.
+/// Extract a query parameter value from a request URL like `/?code=abc&x=y`,
+/// percent-decoding the captured value.
 fn query_param(url: &str, key: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     for pair in query.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
             if k == key {
-                return Some(v.to_string());
+                return Some(percent_decode(v));
             }
         }
     }
     None
+}
+
+/// Decode `%XX` escapes (and `+` as space) in a query-string value.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push((hi * 16 + lo) as u8);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -264,5 +299,14 @@ mod tests {
             Some("abc123".to_string())
         );
         assert_eq!(query_param("/", "code"), None);
+    }
+
+    #[test]
+    fn query_param_percent_decodes_value() {
+        assert_eq!(
+            query_param("/?code=4%2F0Ab%2Bc&scope=x", "code"),
+            Some("4/0Ab+c".to_string())
+        );
+        assert_eq!(query_param("/?code=a+b", "code"), Some("a b".to_string()));
     }
 }

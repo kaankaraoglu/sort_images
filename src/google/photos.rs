@@ -251,8 +251,13 @@ impl PhotosApi for UreqPhotos {
                 .set("X-Goog-Upload-File-Name", file_name)
                 .send_bytes(bytes)
                 .map_err(Self::classify)?;
-            resp.into_string()
-                .map_err(|e| ApiError::Fatal(e.to_string()))
+            let token = resp
+                .into_string()
+                .map_err(|e| ApiError::Fatal(e.to_string()))?;
+            if token.trim().is_empty() {
+                return Err(ApiError::Fatal("upload returned an empty token".into()));
+            }
+            Ok(token)
         })
     }
 
