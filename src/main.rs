@@ -4,6 +4,7 @@
 //! Usage:
 //!     sort_images <folder> [--dry-run] [--recursive]
 
+mod config;
 mod sort;
 
 use std::env;
