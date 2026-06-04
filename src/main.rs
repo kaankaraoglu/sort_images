@@ -1,9 +1,13 @@
-//! Sort image files into `YYYY/Qn` folders based on the quarter they were taken.
+//! Sort image files into `YYYY Season` folders based on the season they were
+//! taken.
 //!
 //! For each image the capture date is read from EXIF (DateTimeOriginal, then
 //! DateTimeDigitized, then DateTime). If no EXIF date is found, the file's last
-//! modified time is used as a fallback. Files are then *moved* into a
-//! subfolder named e.g. `2026/Q1` or `2011/Q4`.
+//! modified time is used as a fallback. Files are then *moved* into a single
+//! flat folder named e.g. `2026 Winter` or `2011 Fall`.
+//!
+//! Seasons are aligned to calendar quarters (Northern hemisphere):
+//! Winter = Jan–Mar, Spring = Apr–Jun, Summer = Jul–Sep, Fall = Oct–Dec.
 //!
 //! Usage:
 //!     sort_images <folder> [--dry-run] [--recursive]
@@ -11,7 +15,7 @@
 //!     <folder>      Directory containing the images to sort.
 //!     --dry-run     Print what would happen without moving any files.
 //!     --recursive   Also descend into subdirectories (skips dirs that look
-//!                   like already-created YYYY/Qn buckets).
+//!                   like already-created `YYYY Season` buckets).
 
 use std::env;
 use std::fs;
@@ -21,8 +25,8 @@ use std::process;
 use chrono::{DateTime, Datelike, Local};
 
 const IMAGE_EXTS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "heif",
-    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "sr2",
+    "jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "heif", "cr2", "cr3", "nef",
+    "arw", "dng", "raf", "orf", "rw2", "sr2",
 ];
 
 struct Config {
@@ -55,19 +59,14 @@ fn main() {
     let (mut moved, mut skipped, mut errors) = (0u32, 0u32, 0u32);
 
     for path in files {
-        match quarter_dir_for(&path) {
-            Ok((year, quarter, source)) => {
-                let dest_dir = cfg.root.join(year.to_string()).join(format!("Q{quarter}"));
+        match season_dir_for(&path) {
+            Ok((year, season, source)) => {
+                let bucket = format!("{year} {season}");
+                let dest_dir = cfg.root.join(&bucket);
                 let dest = unique_dest(&dest_dir, &path);
 
                 if cfg.dry_run {
-                    println!(
-                        "[dry-run] {} -> {}/Q{} ({})",
-                        file_name(&path),
-                        year,
-                        quarter,
-                        source
-                    );
+                    println!("[dry-run] {} -> {} ({})", file_name(&path), bucket, source);
                     moved += 1;
                     continue;
                 }
@@ -80,7 +79,7 @@ fn main() {
 
                 match move_file(&path, &dest) {
                     Ok(()) => {
-                        println!("{} -> {}/Q{} ({})", file_name(&path), year, quarter, source);
+                        println!("{} -> {} ({})", file_name(&path), bucket, source);
                         moved += 1;
                     }
                     Err(e) => {
@@ -101,7 +100,11 @@ fn main() {
         moved,
         skipped,
         errors,
-        if cfg.dry_run { " (dry run — nothing changed)" } else { "" }
+        if cfg.dry_run {
+            " (dry run — nothing changed)"
+        } else {
+            ""
+        }
     );
 }
 
@@ -114,7 +117,7 @@ fn parse_args() -> Result<Config, String> {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
             "--recursive" | "-r" => recursive = true,
-            "-h" | "--help" => return Err("Sort images into YYYY/Qn folders.".to_string()),
+            "-h" | "--help" => return Err("Sort images into `YYYY Season` folders.".to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}"));
             }
@@ -128,7 +131,11 @@ fn parse_args() -> Result<Config, String> {
     }
 
     let root = root.ok_or_else(|| "Missing folder argument.".to_string())?;
-    Ok(Config { root, dry_run, recursive })
+    Ok(Config {
+        root,
+        dry_run,
+        recursive,
+    })
 }
 
 /// Recursively (or not) gather image files under `dir`.
@@ -149,13 +156,16 @@ fn collect_images(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::i
     Ok(())
 }
 
-/// Avoid descending into folders we (or a previous run) created, e.g. `Q1`.
+/// Avoid descending into folders we (or a previous run) created, e.g. `2019 Fall`.
 fn looks_like_bucket(path: &Path) -> bool {
-    match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => {
-            name.len() == 2
-                && name.starts_with('Q')
-                && name[1..].chars().all(|c| c.is_ascii_digit())
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    match name.split_once(' ') {
+        Some((year, season)) => {
+            !year.is_empty()
+                && year.chars().all(|c| c.is_ascii_digit())
+                && matches!(season, "Winter" | "Spring" | "Summer" | "Fall")
         }
         None => false,
     }
@@ -171,26 +181,30 @@ fn is_image(path: &Path) -> bool {
     }
 }
 
-/// Return (year, quarter, source-of-date) for an image.
-fn quarter_dir_for(path: &Path) -> Result<(i32, u32, &'static str), String> {
+/// Return (year, season, source-of-date) for an image.
+fn season_dir_for(path: &Path) -> Result<(i32, &'static str, &'static str), String> {
     if let Some((year, month)) = exif_year_month(path) {
-        return Ok((year, quarter_of(month), "exif"));
+        return Ok((year, season_of(month), "exif"));
     }
     let (year, month) = mtime_year_month(path)?;
-    Ok((year, quarter_of(month), "mtime"))
+    Ok((year, season_of(month), "mtime"))
 }
 
-fn quarter_of(month: u32) -> u32 {
-    ((month - 1) / 3) + 1
+/// Map a month (1–12) to a season name, aligned to calendar quarters.
+fn season_of(month: u32) -> &'static str {
+    match (month - 1) / 3 {
+        0 => "Winter",
+        1 => "Spring",
+        2 => "Summer",
+        _ => "Fall",
+    }
 }
 
 /// Try to read the capture date from EXIF metadata.
 fn exif_year_month(path: &Path) -> Option<(i32, u32)> {
     let file = fs::File::open(path).ok()?;
     let mut reader = std::io::BufReader::new(file);
-    let exif = exif::Reader::new()
-        .read_from_container(&mut reader)
-        .ok()?;
+    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
 
     let tags = [
         exif::Tag::DateTimeOriginal,
