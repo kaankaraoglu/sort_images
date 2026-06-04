@@ -6,7 +6,7 @@
 //! subfolder named e.g. `2026/Q1` or `2011/Q4`.
 //!
 //! Usage:
-//!     sort_photos <folder> [--dry-run] [--recursive]
+//!     sort_images <folder> [--dry-run] [--recursive]
 //!
 //!     <folder>      Directory containing the images to sort.
 //!     --dry-run     Print what would happen without moving any files.
@@ -36,7 +36,7 @@ fn main() {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("{msg}");
-            eprintln!("Usage: sort_photos <folder> [--dry-run] [--recursive]");
+            eprintln!("Usage: sort_images <folder> [--dry-run] [--recursive]");
             process::exit(2);
         }
     };

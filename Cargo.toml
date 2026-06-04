@@ -1,5 +1,5 @@
 [package]
-name = "sort_photos"
+name = "sort_images"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,5 +8,5 @@ kamadak-exif = "0.5"
 chrono = "0.4"
 
 [[bin]]
-name = "sort_photos"
+name = "sort_images"
 path = "src/main.rs"

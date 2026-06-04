@@ -1,7 +1,23 @@
-# sort_photos
+<!-- Allow this file not to have a first-line heading -->
+<!-- markdownlint-disable-file MD041 no-emphasis-as-heading -->
 
-Moves image files into `YYYY/Qn` folders (e.g. `2026/Q1`, `2011/Q4`) based on the
-quarter each photo was taken.
+<!-- inline html -->
+<!-- markdownlint-disable-file MD033 -->
+
+<div align="center">
+
+# 📷 `sort_images`
+
+**Sort images into `YYYY/Qn` folders based on the quarter they were taken**
+
+[![dependency status](https://deps.rs/repo/github/kaankaraoglu/sort_images/status.svg)](https://deps.rs/repo/github/kaankaraoglu/sort_images)
+[![CI](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml/badge.svg)](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml)
+</div>
+
+## About
+
+`sort_images` walks a folder of images and moves each one into a `YYYY/Qn`
+subfolder (e.g. `2026/Q1`, `2011/Q4`) based on the quarter it was taken.
 
 - **Date source:** EXIF capture date (`DateTimeOriginal` → `DateTimeDigitized` →
   `DateTime`), falling back to the file's last-modified time when no EXIF date exists.
@@ -14,17 +30,17 @@ quarter each photo was taken.
 cargo build --release
 ```
 
-## Run
+## Usage
 
 ```bash
 # Sort everything in ~/Pictures
-./target/release/sort_photos ~/Pictures
+./target/release/sort_images ~/Pictures
 
 # Preview first without touching anything
-./target/release/sort_photos ~/Pictures --dry-run
+./target/release/sort_images ~/Pictures --dry-run
 
 # Also descend into subfolders
-./target/release/sort_photos ~/Pictures --recursive
+./target/release/sort_images ~/Pictures --recursive
 ```
 
 ## Notes
