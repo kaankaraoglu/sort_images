@@ -8,7 +8,7 @@
 
 # 📷 `sort_images`
 
-**Sort images and videos into `YYYY-MM` folders based on the month they were taken**
+**Sort images and videos into configurable date folders based on the month they were taken**
 
 [![dependency status](https://deps.rs/repo/github/kaankaraoglu/sort_images/status.svg)](https://deps.rs/repo/github/kaankaraoglu/sort_images)
 [![CI](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml/badge.svg)](https://github.com/kaankaraoglu/sort_images/actions/workflows/build-lint-format.yml)
@@ -17,8 +17,10 @@
 ## About
 
 `sort_images` walks a folder of images and videos and moves each one into a
-`YYYY-MM` folder (e.g. `2026-01`, `2011-10`) based on the month it was taken,
-split by type into `photos` and `videos` subfolders:
+date folder based on the month it was taken. By default that folder is
+`YYYY-MM` (e.g. `2026-01`, `2011-10`), split by type into `photos` and `videos`
+subfolders — but both the [folder format](#configuration) and the split are
+configurable:
 
 ```text
 2019-10/
@@ -61,17 +63,60 @@ cargo build --release
 
 # Also descend into subfolders
 ./target/release/sort_images ~/Pictures --recursive
+
+# Nest by year then month, and don't split photos/videos
+./target/release/sort_images ~/Pictures --format '{year}/{month}' --no-split
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | Preview what would happen without moving any files. |
-| `--recursive` | Descend into subfolders (already-sorted `YYYY-MM` buckets are skipped). |
+| `--recursive` | Descend into subfolders (already-sorted date buckets are skipped). |
+| `--format <TEMPLATE>` | Override the date folder template (see [Configuration](#configuration)). |
+| `--split` / `--no-split` | Force the `photos`/`videos` split on or off. |
+
+## Configuration
+
+The folder layout is configurable through an optional `config.toml` in the
+directory you run `sort_images` from, with CLI flags taking precedence.
+**Precedence (low → high):** built-in defaults → `config.toml` → CLI flags. If
+no config file is present and no flags are given, the default `{year}-{month}`
+layout with the photos/videos split is used (unchanged from earlier versions).
+
+```toml
+# config.toml
+format = "{year}-{month}"   # date folder template
+split  = true               # split into photos/ and videos/ subfolders
+```
+
+Copy [`config.example.toml`](config.example.toml) to `config.toml` to get
+started. Both keys are optional; unknown keys are rejected so typos can't be
+silently ignored.
+
+### Template tokens
+
+| Token | Renders as | Example |
+|-------|-----------|---------|
+| `{year}` | 4-digit year | `2026` |
+| `{month}` | zero-padded month `01`–`12` | `01` |
+
+Any other text is literal, and `/` nests folders:
+
+| Template | Result |
+|----------|--------|
+| `{year}-{month}` | `2026-01` |
+| `{year}/{month}` | `2026/01` |
+| `{year}` | `2026` |
+
+A template must contain at least one `{year}` or `{month}` token. Unknown tokens
+(e.g. `{day}`), path traversal (`..`, leading `/`), and unbalanced braces are
+rejected before any file is moved.
 
 ## Notes
 
 - Name collisions are handled by appending ` (1)`, ` (2)`, … so nothing is overwritten.
-- Already-created buckets (e.g. `2019-10`) are skipped when running with `--recursive`.
+- Already-created buckets (matching the configured `--format`) are skipped when
+  running with `--recursive`.
 - Supported image extensions include jpg/jpeg/png/gif/bmp/tiff/webp/heic plus
   common RAW formats (cr2, nef, arw, dng, …); supported video extensions include
   mov/mp4/m4v/3gp/avi/mkv/webm. Edit `IMAGE_EXTS` / `VIDEO_EXTS` in

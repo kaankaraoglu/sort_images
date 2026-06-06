@@ -1,5 +1,6 @@
-//! Sorting media into `YYYY-MM` buckets: media discovery, capture-date
-//! extraction (EXIF / mvhd / mtime), Live Photo pairing, and moving files.
+//! Sorting media into date buckets: media discovery, the configurable folder
+//! format, capture-date extraction (EXIF / mvhd / mtime), Live Photo pairing,
+//! and moving files.
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,6 +25,164 @@ const VIDEO_EXTS: &[&str] = &[
 /// (1970-01-01). `mvhd` creation times are counted from the Mac epoch.
 const MAC_EPOCH_OFFSET_SECS: i64 = 2_082_844_800;
 
+/// A parsed, validated date-folder template, built from a token string such as
+/// `{year}-{month}` or `{year}/{month}`. It renders a relative path for a given
+/// `(year, month)` and recognizes the top-level folders it produces (so the
+/// recursive walk can skip already-sorted buckets).
+pub struct FolderFormat {
+    /// Path components, split on `/`. Each is a sequence of tokens.
+    segments: Vec<Vec<Token>>,
+}
+
+/// One piece of a template path segment.
+enum Token {
+    Year,
+    Month,
+    Literal(String),
+}
+
+impl FolderFormat {
+    /// The built-in default, matching the tool's original `YYYY-MM` layout.
+    pub fn default_template() -> &'static str {
+        "{year}-{month}"
+    }
+
+    /// Parse and validate a template string. Returns a human-readable error
+    /// describing the first problem found.
+    pub fn parse(template: &str) -> Result<FolderFormat, String> {
+        if template.starts_with('/') {
+            return Err("Format must be a relative path (no leading '/').".to_string());
+        }
+
+        let mut segments = Vec::new();
+        let mut has_token = false;
+
+        for raw in template.split('/') {
+            let tokens = parse_segment(raw)?;
+            if tokens.is_empty() {
+                return Err("Format has an empty path segment.".to_string());
+            }
+            if matches!(tokens.as_slice(), [Token::Literal(s)] if s == "..") {
+                return Err("Format must not contain a '..' path segment.".to_string());
+            }
+            if tokens
+                .iter()
+                .any(|t| matches!(t, Token::Year | Token::Month))
+            {
+                has_token = true;
+            }
+            segments.push(tokens);
+        }
+
+        if !has_token {
+            return Err("Format must contain at least one {year} or {month} token.".to_string());
+        }
+
+        Ok(FolderFormat { segments })
+    }
+
+    /// Render the relative date path for a given year and month.
+    pub fn render(&self, year: i32, month: u32) -> String {
+        self.segments
+            .iter()
+            .map(|tokens| {
+                tokens
+                    .iter()
+                    .map(|t| match t {
+                        Token::Year => format!("{year:04}"),
+                        Token::Month => format!("{month:02}"),
+                        Token::Literal(s) => s.clone(),
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// True if `dir_name` matches the first path segment of this template, i.e.
+    /// it is the root of a bucket this tool would create. Used to skip
+    /// already-sorted folders during a recursive walk.
+    pub fn is_bucket_root(&self, dir_name: &str) -> bool {
+        match self.segments.first() {
+            Some(tokens) => segment_matches(tokens, dir_name),
+            None => false,
+        }
+    }
+}
+
+/// Parse one `/`-free template segment into tokens.
+fn parse_segment(s: &str) -> Result<Vec<Token>, String> {
+    let mut tokens = Vec::new();
+    let mut literal = String::new();
+    let mut chars = s.chars();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => {
+                if !literal.is_empty() {
+                    tokens.push(Token::Literal(std::mem::take(&mut literal)));
+                }
+                let mut name = String::new();
+                let mut closed = false;
+                for c2 in chars.by_ref() {
+                    if c2 == '}' {
+                        closed = true;
+                        break;
+                    }
+                    name.push(c2);
+                }
+                if !closed {
+                    return Err(format!("Unbalanced '{{' in format near '{{{name}'."));
+                }
+                match name.as_str() {
+                    "year" => tokens.push(Token::Year),
+                    "month" => tokens.push(Token::Month),
+                    other => {
+                        return Err(format!(
+                            "Unknown token '{{{other}}}' in format. Allowed tokens: {{year}}, {{month}}."
+                        ))
+                    }
+                }
+            }
+            '}' => return Err("Unbalanced '}' in format.".to_string()),
+            _ => literal.push(c),
+        }
+    }
+
+    if !literal.is_empty() {
+        tokens.push(Token::Literal(literal));
+    }
+    Ok(tokens)
+}
+
+/// Match a directory name against a template segment: `{year}` consumes exactly
+/// four leading digits, `{month}` exactly two digits in `01`–`12`, and literals
+/// match verbatim. The whole name must be consumed.
+fn segment_matches(tokens: &[Token], name: &str) -> bool {
+    let mut rest = name;
+    for token in tokens {
+        match token {
+            Token::Year => {
+                if rest.len() < 4 || !rest[..4].bytes().all(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                rest = &rest[4..];
+            }
+            Token::Month => {
+                if rest.len() < 2 || !is_month_label(&rest[..2]) {
+                    return false;
+                }
+                rest = &rest[2..];
+            }
+            Token::Literal(s) => match rest.strip_prefix(s.as_str()) {
+                Some(tail) => rest = tail,
+                None => return false,
+            },
+        }
+    }
+    rest.is_empty()
+}
+
 /// Where a single file should be filed: a `YYYY` + month bucket and the
 /// `photos`/`videos` subfolder within it, plus where the date came from.
 pub struct Placement {
@@ -33,22 +192,36 @@ pub struct Placement {
     pub source: &'static str,
 }
 
-/// Recursively (or not) gather image and video files under `dir`.
-pub fn collect_media(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+/// Recursively (or not) gather image and video files under `dir`. Folders that
+/// look like a bucket this tool created (per `format`) are not descended into.
+pub fn collect_media(
+    dir: &Path,
+    recursive: bool,
+    format: &FolderFormat,
+    out: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            if recursive && !looks_like_bucket(&path) {
-                collect_media(&path, recursive, out)?;
+            if recursive && !is_bucket_dir(&path, format) {
+                collect_media(&path, recursive, format, out)?;
             }
         } else if file_type.is_file() && is_media(&path) {
             out.push(path);
         }
     }
     Ok(())
+}
+
+/// Avoid descending into folders this tool (or a previous run) created, e.g.
+/// `2019-10` for the default template.
+fn is_bucket_dir(path: &Path, format: &FolderFormat) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| format.is_bucket_root(name))
 }
 
 /// Recursively delete `.DS_Store` files under `dir`, returning the number
@@ -80,21 +253,8 @@ pub fn purge_ds_store(dir: &Path, dry_run: bool) -> std::io::Result<u32> {
     Ok(removed)
 }
 
-/// Avoid descending into folders we (or a previous run) created, e.g. `2019-10`.
-fn looks_like_bucket(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    match name.split_once('-') {
-        Some((year, month)) => {
-            !year.is_empty() && year.chars().all(|c| c.is_ascii_digit()) && is_month_label(month)
-        }
-        None => false,
-    }
-}
-
 /// True if `s` is a zero-padded two-digit month (`01`–`12`), as used in the
-/// `YYYY-MM` bucket names this tool creates.
+/// `{month}` token of bucket names this tool creates.
 fn is_month_label(s: &str) -> bool {
     s.len() == 2 && matches!(s.parse::<u32>(), Ok(1..=12))
 }
@@ -390,6 +550,77 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn renders_default_year_month_template() {
+        let fmt = FolderFormat::parse("{year}-{month}").unwrap();
+        assert_eq!(fmt.render(2026, 1), "2026-01");
+        assert_eq!(fmt.render(2011, 10), "2011-10");
+    }
+
+    #[test]
+    fn renders_nested_template() {
+        let fmt = FolderFormat::parse("{year}/{month}").unwrap();
+        assert_eq!(fmt.render(2026, 1), "2026/01");
+    }
+
+    #[test]
+    fn renders_year_only_template() {
+        let fmt = FolderFormat::parse("{year}").unwrap();
+        assert_eq!(fmt.render(2026, 7), "2026");
+    }
+
+    #[test]
+    fn renders_literal_text_verbatim() {
+        let fmt = FolderFormat::parse("pics-{year}_{month}").unwrap();
+        assert_eq!(fmt.render(2026, 3), "pics-2026_03");
+    }
+
+    #[test]
+    fn parse_rejects_unknown_token() {
+        assert!(FolderFormat::parse("{year}-{day}").is_err());
+        assert!(FolderFormat::parse("{foo}").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_template_without_tokens() {
+        assert!(FolderFormat::parse("photos").is_err());
+        assert!(FolderFormat::parse("").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_path_traversal() {
+        assert!(FolderFormat::parse("../{year}").is_err());
+        assert!(FolderFormat::parse("{year}/../{month}").is_err());
+        assert!(FolderFormat::parse("/{year}-{month}").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_unbalanced_braces() {
+        assert!(FolderFormat::parse("{year-{month}").is_err());
+        assert!(FolderFormat::parse("{year}}").is_err());
+        assert!(FolderFormat::parse("year}").is_err());
+    }
+
+    #[test]
+    fn bucket_root_matches_flat_template() {
+        let fmt = FolderFormat::parse("{year}-{month}").unwrap();
+        assert!(fmt.is_bucket_root("2019-10"));
+        assert!(fmt.is_bucket_root("2026-01"));
+        assert!(!fmt.is_bucket_root("2019 10")); // old space format
+        assert!(!fmt.is_bucket_root("2019-Fall"));
+        assert!(!fmt.is_bucket_root("2019-13")); // month out of range
+        assert!(!fmt.is_bucket_root("random"));
+    }
+
+    #[test]
+    fn bucket_root_matches_first_segment_of_nested_template() {
+        let fmt = FolderFormat::parse("{year}/{month}").unwrap();
+        // Only the top-level year folder is the bucket root we skip.
+        assert!(fmt.is_bucket_root("2026"));
+        assert!(!fmt.is_bucket_root("01"));
+        assert!(!fmt.is_bucket_root("2026-01"));
+    }
+
+    #[test]
     fn detects_video_extensions_case_insensitively() {
         assert!(is_video(Path::new("clip.mp4")));
         assert!(is_video(Path::new("clip.MOV")));
@@ -496,15 +727,6 @@ mod tests {
         assert!(!is_month_label("00")); // out of range
         assert!(!is_month_label("13")); // out of range
         assert!(!is_month_label("Fall")); // old season name
-    }
-
-    #[test]
-    fn month_buckets_are_recognised() {
-        assert!(looks_like_bucket(Path::new("/p/2019-10")));
-        assert!(looks_like_bucket(Path::new("/p/2026-01")));
-        assert!(!looks_like_bucket(Path::new("/p/2019 10"))); // old space format
-        assert!(!looks_like_bucket(Path::new("/p/2019-Fall")));
-        assert!(!looks_like_bucket(Path::new("/p/random")));
     }
 
     #[test]
