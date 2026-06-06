@@ -1,0 +1,18 @@
+# Example configuration for sort_images.
+#
+# Copy this to `config.toml` in the directory you run sort_images from.
+# Both keys are optional; omitted keys fall back to the built-in defaults
+# shown below. CLI flags (--format, --split/--no-split) override these.
+
+# Template for the date folder. Tokens:
+#   {year}   4-digit year   (e.g. 2026)
+#   {month}  zero-padded month 01-12
+# A "/" nests folders. Any other text is literal.
+# Examples: "{year}-{month}" -> 2026-01
+#           "{year}/{month}" -> 2026/01
+#           "{year}"         -> 2026
+format = "{year}-{month}"
+
+# Split each date folder into photos/ and videos/ subfolders.
+# Set to false to keep all files directly in the date folder.
+split = true

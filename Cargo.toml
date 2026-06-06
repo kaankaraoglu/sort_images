@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 kamadak-exif = "0.5"
 chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [[bin]]
 name = "sort_images"
