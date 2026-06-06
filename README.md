@@ -61,53 +61,12 @@ cargo build --release
 
 # Also descend into subfolders
 ./target/release/sort_images ~/Pictures --recursive
-
-# Sort and also upload to Google Photos
-./target/release/sort_images ~/Pictures --upload
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--dry-run` | Preview what would happen without moving files or making network calls. |
+| `--dry-run` | Preview what would happen without moving any files. |
 | `--recursive` | Descend into subfolders (already-sorted `YYYY-MM` buckets are skipped). |
-| `--upload` | Also upload sorted media to Google Photos, mirroring each `YYYY-MM` group as an album. |
-
-## Google Photos upload
-
-### One-time Google Cloud setup
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create a new project (or select an existing one).
-2. Enable the **Photos Library API** for that project.
-3. Under **APIs & Services → Credentials**, create an **OAuth 2.0 Client ID** of type **Desktop app**.
-4. Copy the generated **Client ID** and **Client Secret**.
-
-### Config file
-
-Create the config file at `~/.config/sort_images/config.toml`:
-
-```toml
-# ~/.config/sort_images/config.toml
-[google]
-client_id = "xxxx.apps.googleusercontent.com"
-client_secret = "yyyy"
-```
-
-### Usage
-
-```bash
-# Sort and also upload, mirroring YYYY-MM folders as albums
-./target/release/sort_images ~/Pictures --upload
-
-# Preview without sorting, uploading, or any network calls
-./target/release/sort_images ~/Pictures --upload --dry-run
-```
-
-### Behavior
-
-- **First run** opens a browser for OAuth consent; tokens are cached at `~/.config/sort_images/token.json` for subsequent runs.
-- An upload ledger at `~/.config/sort_images/ledger.json` makes `--upload` safely repeatable — already-uploaded files are skipped automatically.
-- The `appendonly` scope means the tool only ever sees and manages photos it uploaded; it cannot read your existing library.
-- Live Photo `.HEIC`/`.MOV` pairs upload as two media items into the same month album, keeping the pair together.
 
 ## Notes
 
